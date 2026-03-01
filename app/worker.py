@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -9,11 +9,26 @@ from app import db
 from app.settings import settings
 
 
+logger = logging.getLogger(__name__)
+
+
 async def fetch_and_store() -> None:
     async with httpx.AsyncClient() as client:
         resp = await client.get(settings.status_url, timeout=10.0)
         resp.raise_for_status()
-        data = resp.json()
+
+        content_type = (resp.headers.get("content-type") or "").lower()
+        if "json" not in content_type:
+            logger.warning("unexpected content-type=%s; skipping sample", content_type)
+            return
+
+        text = resp.text
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            # Icecast sometimes returns truncated/invalid JSON. Skip this tick.
+            logger.warning("invalid JSON from icecast (len=%s); skipping sample", len(text))
+            return
 
     stats = data.get("icestats", {})
     source = stats.get("source", {})
@@ -33,6 +48,8 @@ async def fetch_and_store() -> None:
         for part in audio_info.split(";"):
             if "=" in part:
                 k, v = part.split("=", 1)
+                k = k.strip().lower()
+                v = v.strip()
                 if "bitrate" in k:
                     bitrate = _safe_int(v)
                 elif "samplerate" in k:
@@ -50,11 +67,7 @@ async def fetch_and_store() -> None:
         listenurl,
         json.dumps(data),
     )
-    logging.info(
-        "inserted listeners=%s title=%s",
-        listeners,
-        title,
-    )
+    logger.info("inserted listeners=%s title=%s", listeners, title)
 
 
 def _safe_int(v: Any) -> Optional[int]:
@@ -70,7 +83,7 @@ async def worker_loop() -> None:
         try:
             await fetch_and_store()
         except Exception:
-            logging.exception("error polling status")
+            logger.exception("error polling status")
         await asyncio.sleep(settings.poll_seconds)
 
 
