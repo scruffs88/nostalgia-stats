@@ -92,6 +92,18 @@ async def dashboard() -> HTMLResponse:
       border-radius:10px;padding:8px 10px;font-size:13px;
     }
     a{color:#8ab4ff}
+
+    /* KPI colours */
+    .kpi-listeners { color: #4ade80; }   /* green */
+    .kpi-peaks     { color: #fbbf24; }   /* amber */
+    .kpi-now       { color: #38bdf8; }   /* cyan */
+
+    /* subtle glow for active KPIs (now section) */
+    .kpi-card {
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,0.04),
+        0 0 24px rgba(56,189,248,0.08);
+    }
   </style>
 </head>
 
@@ -113,22 +125,22 @@ async def dashboard() -> HTMLResponse:
     </header>
 
     <div class="grid">
-      <div class="card col-12">
+      <div class="card col-12 kpi-card">
         <h2>Now</h2>
         <div class="statRow">
           <div class="stat">
             <div class="k">Listeners</div>
-            <div class="v" id="nowListeners">—</div>
+            <div class="v kpi-listeners" id="nowListeners">—</div>
             <div class="s" id="nowUpdated">Updated: —</div>
           </div>
           <div class="stat">
             <div class="k">Now playing</div>
-            <div class="v" id="nowTitle" style="font-size:16px;font-weight:700">—</div>
+            <div class="v kpi-now" id="nowTitle" style="font-size:16px;font-weight:700">—</div>
             <div class="s" id="nowMeta">—</div>
           </div>
           <div class="stat">
             <div class="k">Peaks</div>
-            <div class="v" id="peakToday">—</div>
+            <div class="v kpi-peaks" id="peakToday">—</div>
             <div class="s" id="peakWeek">—</div>
           </div>
         </div>
