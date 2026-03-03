@@ -1,8 +1,12 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from app import db
 from app.settings import settings
+
+from datetime import datetime, date, time, timedelta
+from zoneinfo import ZoneInfo
+from typing import Optional
 
 app = FastAPI()
 
@@ -116,11 +120,25 @@ async def dashboard() -> HTMLResponse:
       </div>
       <div class="toolbar">
         <span class="pill" id="tzPill">TZ: Europe/Bucharest</span>
-        <select id="days">
-          <option value="1">Last 1 day</option>
-          <option value="7" selected>Last 7 days</option>
-          <option value="30">Last 30 days</option>
+        <select id="range">
+          <option value="last24">Last 24 hours</option>
+          <option value="today">Today</option>
+          <option value="yesterday">Yesterday</option>
+          <option value="last7" selected>Last 7 days</option>
+          <option value="thisweek">This week</option>
+          <option value="lastweek">Last week</option>
+          <option value="thismonth">This month</option>
+          <option value="lastmonth">Last month</option>
+          <option value="last30">Last 30 days</option>
+          <option value="last365">Last 365 days</option>
+          <option value="custom">Custom range...</option>
         </select>
+        <div id="customRange" style="display:none; gap:4px; align-items:center;">
+          <input type="date" id="startDate" />
+          <input type="date" id="endDate" />
+          <button id="applyRange">Apply</button>
+          <span id="rangeError" style="color:#fbbf24;font-size:12px;margin-left:6px;"></span>
+        </div>
       </div>
     </header>
 
@@ -174,6 +192,84 @@ function chartDefaults(){
   Chart.defaults.color = "#9fb0c3";
   Chart.defaults.borderColor = "rgba(255,255,255,.08)";
   Chart.defaults.font.family = "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial";
+}
+
+function localNow(){
+  return new Date(new Date().toLocaleString('en-US',{timeZone:TZ}));
+}
+
+function localDateString(dt){
+  return dt.toLocaleDateString('sv-SE',{timeZone:TZ});
+}
+
+function computePreset(preset){
+  const now = localNow();
+  let start, end, days;
+  switch(preset){
+    case 'last24': days=1; break;
+    case 'today':
+      start = localDateString(now);
+      end = start;
+      break;
+    case 'yesterday':{
+      const d=new Date(now);
+      d.setDate(d.getDate()-1);
+      start = localDateString(d);
+      end = start;
+      break;
+    }
+    case 'last7': days=7; break;
+    case 'thisweek':{
+      const d=new Date(now);
+      const dow=(d.getDay()+6)%7;
+      const m=new Date(now);
+      m.setDate(d.getDate()-dow);
+      start = localDateString(m);
+      end = localDateString(now);
+      break;
+    }
+    case 'lastweek':{
+      const d=new Date(now);
+      const dow=(d.getDay()+6)%7;
+      const mon=new Date(now);
+      mon.setDate(d.getDate()-dow-7);
+      start=localDateString(mon);
+      const sun=new Date(mon);
+      sun.setDate(mon.getDate()+6);
+      end=localDateString(sun);
+      break;
+    }
+    case 'thismonth':{
+      const m=new Date(now);
+      m.setDate(1);
+      start=localDateString(m);
+      end=localDateString(now);
+      break;
+    }
+    case 'lastmonth':{
+      const m=new Date(now);
+      m.setDate(1);
+      m.setMonth(m.getMonth()-1);
+      start=localDateString(m);
+      const m2=new Date(m);
+      m2.setMonth(m.getMonth()+1);
+      m2.setDate(0);
+      end=localDateString(m2);
+      break;
+    }
+    case 'last30': days=30; break;
+    case 'last365': days=365; break;
+  }
+  return {start,end,days};
+}
+
+function saveSelection(sel){
+  localStorage.setItem('rangeSelection', JSON.stringify(sel));
+}
+
+function loadSelection(){
+  const r=localStorage.getItem('rangeSelection');
+  return r? JSON.parse(r): null;
 }
 
 let hourlyChart;
@@ -231,33 +327,54 @@ function makeHourlyChart(labels, values, annotations){
 
 async function load(){
   document.getElementById("tzPill").textContent = "TZ: " + TZ;
-  const days = document.getElementById("days").value;
+  // determine selection
+  let sel = loadSelection();
+  if(!sel){
+    sel = {type:'preset', value:'last7'};
+  }
+  // apply to UI
+  document.getElementById('range').value = sel.value;
+  if(sel.type==='custom' && sel.start && sel.end){
+    document.getElementById('customRange').style.display='flex';
+    document.getElementById('startDate').value=sel.start;
+    document.getElementById('endDate').value=sel.end;
+  }
 
+  // compute query params
+  let params = new URLSearchParams({tz:TZ});
+  if(sel.type==='preset'){
+    const {start,end,days} = computePreset(sel.value);
+    if(days){ params.set('days', days); }
+    if(start && end){ params.set('start', start); params.set('end', end); }
+  } else if(sel.type==='custom'){
+    params.set('start', sel.start);
+    params.set('end', sel.end);
+  }
+  const q = params.toString();
+
+  // now/kpis
   const now = await (await fetch("/api/now")).json();
   document.getElementById("nowListeners").textContent = now.listeners ?? "—";
   document.getElementById("nowTitle").textContent = now.title ?? "—";
   document.getElementById("nowUpdated").textContent = "Updated: " + fmtLocal(now.ts_utc || now.timestamp || now.ts);
   document.getElementById("nowMeta").textContent = now.listenurl ? now.listenurl : "—";
 
-  // peaks (you’ll add endpoint below; if not present, keep placeholder)
   try {
-    const peaks = await (await fetch(`/api/stats/peaks?days=${days}&tz=${TZ}`)).json();
+    const peaks = await (await fetch(`/api/stats/peaks?${q}`)).json();
     document.getElementById("peakToday").textContent = peaks.peak_today ?? "—";
-    document.getElementById("peakWeek").textContent = `Peak ${days}d: ${peaks.peak_window ?? "—"}`;
-  } catch(e){}
+    document.getElementById("peakWeek").textContent = peaks.peak_window ? `Peak: ${peaks.peak_window}` : "";
+  } catch(e){ }
 
-  const hourly = await (await fetch(`/api/stats/hourly?days=${days}&tz=${TZ}`)).json();
+  const hourly = await (await fetch(`/api/stats/hourly?${q}`)).json();
   const labels = hourly.map(d => String(d.hour).padStart(2,"0"));
   const values = hourly.map(d => d.avg_listeners);
 
-  // annotations (optional endpoint; safe if missing)
+  // annotations
   let ann = {};
   try{
-    const events = await (await fetch(`/api/events?days=${days}&tz=${TZ}`)).json();
-    // mark "title change" events as vertical lines (only last ~15 to avoid clutter)
+    const events = await (await fetch(`/api/events?${q}`)).json();
     const last = events.slice(-15);
     last.forEach((ev, i) => {
-      // ev.hour is local hour bucket of event
       ann["e"+i] = {
         type: "line",
         xMin: String(ev.hour).padStart(2,"0"),
@@ -272,12 +389,10 @@ async function load(){
   chartDefaults();
   makeHourlyChart(labels, values, ann);
 
-  // top hours table
   const top = [...hourly]
     .filter(r => r.samples > 0)
     .sort((a,b) => b.avg_listeners - a.avg_listeners)
     .slice(0,10);
-
   const tbody = document.getElementById("topHours");
   tbody.innerHTML = top.map(r => `
     <tr>
@@ -289,13 +404,67 @@ async function load(){
   `).join("");
 }
 
-document.getElementById("days").addEventListener("change", load);
+const rangeSelect = document.getElementById("range");
+const customDiv = document.getElementById("customRange");
+const startInput = document.getElementById("startDate");
+const endInput = document.getElementById("endDate");
+const applyBtn = document.getElementById("applyRange");
+const errspan = document.getElementById("rangeError");
+
+rangeSelect.addEventListener("change", () => {
+  const val = rangeSelect.value;
+  errspan.textContent = "";
+  if(val === "custom"){
+    customDiv.style.display = "flex";
+  } else {
+    customDiv.style.display = "none";
+    saveSelection({type:'preset', value: val});
+    load();
+  }
+});
+
+applyBtn.addEventListener("click", () => {
+  const s = startInput.value;
+  const e = endInput.value;
+  if(!s || !e){ errspan.textContent = "start/end required"; return; }
+  if(e < s){ errspan.textContent = "end must be after start"; return; }
+  const diff = (new Date(e) - new Date(s))/(1000*60*60*24);
+  if(diff > 730){ errspan.textContent = "range > 2 years"; return; }
+  errspan.textContent = "";
+  saveSelection({type:'custom', start: s, end: e});
+  load();
+});
+
 load();
 setInterval(load, 60_000);
 </script>
 </body>
 </html>"""
     return HTMLResponse(html)
+
+
+
+# helpers
+
+def _parse_range(start: Optional[str], end: Optional[str], tz: str):
+    if start or end:
+        if not start or not end:
+            raise HTTPException(status_code=400, detail="both start and end required")
+        try:
+            sd = date.fromisoformat(start)
+            ed = date.fromisoformat(end)
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid date format")
+        if ed < sd:
+            raise HTTPException(status_code=400, detail="end must be >= start")
+        if (ed - sd).days > 365 * 2:
+            raise HTTPException(status_code=400, detail="range too large")
+        z = ZoneInfo(tz)
+        start_dt = datetime.combine(sd, time.min).replace(tzinfo=z).astimezone(ZoneInfo("UTC"))
+        # end exclusive: next day start
+        end_dt = datetime.combine(ed + timedelta(days=1), time.min).replace(tzinfo=z).astimezone(ZoneInfo("UTC"))
+        return start_dt, end_dt
+    return None, None
 
 
 @app.get("/api/now")
@@ -310,8 +479,17 @@ async def api_now():
 
 
 @app.get("/api/stats/hourly")
-async def api_hourly(days: int = 7, tz: str = "Europe/Bucharest"):
-    stats = await db.get_hourly_stats(days, tz)
+async def api_hourly(
+    days: Optional[int] = Query(None, ge=1, le=3650),
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    tz: str = "Europe/Bucharest",
+):
+    start_dt, end_dt = _parse_range(start, end, tz)
+    if start_dt and end_dt:
+        stats = await db.get_hourly_stats_range(start_dt, end_dt, tz)
+    else:
+        stats = await db.get_hourly_stats(days or 7, tz)
     # convert Decimal to int/float for JSON serialization
     for row in stats:
         if "avg_listeners" in row and row["avg_listeners"] is not None:
@@ -338,45 +516,93 @@ async def api_today(tz: str = "Europe/Bucharest"):
 from fastapi import Query
 
 @app.get("/api/events")
-async def api_events(days: int = Query(7, ge=1, le=365), tz: str = "Europe/Bucharest"):
-    # Title-change events (last N days)
-    q = f"""
-      WITH x AS (
-        SELECT
-          ts_utc,
-          title,
-          LAG(title) OVER (ORDER BY ts_utc) AS prev_title
-        FROM snapshots
-        WHERE ts_utc >= NOW() - INTERVAL '{days} days'
-      )
-      SELECT
-        ts_utc,
-        title,
-        EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC' AT TIME ZONE '{tz}'))::int AS hour
-      FROM x
-      WHERE title IS NOT NULL AND prev_title IS NOT NULL AND title <> prev_title
-      ORDER BY ts_utc;
-    """
-    async with db.pool.acquire() as conn:  # type: ignore
-        rows = await conn.fetch(q)
-    return [dict(r) for r in rows]
+async def api_events(
+    days: Optional[int] = Query(None, ge=1, le=3650),
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    tz: str = "Europe/Bucharest",
+):
+    start_dt, end_dt = _parse_range(start, end, tz)
+    if start_dt and end_dt:
+        q = f"""
+          WITH x AS (
+            SELECT
+              ts_utc,
+              title,
+              LAG(title) OVER (ORDER BY ts_utc) AS prev_title
+            FROM snapshots
+            WHERE ts_utc >= $1 AND ts_utc < $2
+          )
+          SELECT
+            ts_utc,
+            title,
+            EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC' AT TIME ZONE '{tz}'))::int AS hour
+          FROM x
+          WHERE title IS NOT NULL AND prev_title IS NOT NULL AND title <> prev_title
+          ORDER BY ts_utc;
+        """
+        async with db.pool.acquire() as conn:  # type: ignore
+            rows = await conn.fetch(q, start_dt, end_dt)
+        return [dict(r) for r in rows]
+    else:
+        d = days or 7
+        q = f"""
+          WITH x AS (
+            SELECT
+              ts_utc,
+              title,
+              LAG(title) OVER (ORDER BY ts_utc) AS prev_title
+            FROM snapshots
+            WHERE ts_utc >= NOW() - INTERVAL '{d} days'
+          )
+          SELECT
+            ts_utc,
+            title,
+            EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC' AT TIME ZONE '{tz}'))::int AS hour
+          FROM x
+          WHERE title IS NOT NULL AND prev_title IS NOT NULL AND title <> prev_title
+          ORDER BY ts_utc;
+        """
+        async with db.pool.acquire() as conn:  # type: ignore
+            rows = await conn.fetch(q)
+        return [dict(r) for r in rows]
 
 @app.get("/api/stats/peaks")
-async def api_peaks(days: int = Query(7, ge=1, le=365), tz: str = "Europe/Bucharest"):
-    q_today = f"""
-      SELECT COALESCE(MAX(listeners), 0)::int AS peak_today
-      FROM snapshots
-      WHERE (ts_utc AT TIME ZONE 'UTC' AT TIME ZONE '{tz}')::date
-            = (NOW() AT TIME ZONE '{tz}')::date
-        AND listeners IS NOT NULL;
-    """
-    q_window = f"""
-      SELECT COALESCE(MAX(listeners), 0)::int AS peak_window
-      FROM snapshots
-      WHERE ts_utc >= NOW() - INTERVAL '{days} days'
-        AND listeners IS NOT NULL;
-    """
+async def api_peaks(
+    days: Optional[int] = Query(None, ge=1, le=3650),
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    tz: str = "Europe/Bucharest",
+):
+    start_dt, end_dt = _parse_range(start, end, tz)
     async with db.pool.acquire() as conn:  # type: ignore
-        peak_today = await conn.fetchval(q_today)
-        peak_window = await conn.fetchval(q_window)
-    return {"peak_today": int(peak_today or 0), "peak_window": int(peak_window or 0)}
+        if start_dt and end_dt:
+            rec = await conn.fetchrow(
+                """
+                SELECT COALESCE(MAX(listeners),0)::int as peak
+                FROM snapshots
+                WHERE ts_utc >= $1 AND ts_utc < $2 AND listeners IS NOT NULL
+                """,
+                start_dt,
+                end_dt,
+            )
+            peak = rec["peak"] if rec else 0
+            return {"peak_window": int(peak)}
+        else:
+            # preserve legacy peak_today/peak_window semantics
+            q_today = f"""
+              SELECT COALESCE(MAX(listeners), 0)::int AS peak_today
+              FROM snapshots
+              WHERE (ts_utc AT TIME ZONE 'UTC' AT TIME ZONE '{tz}')::date
+                    = (NOW() AT TIME ZONE '{tz}')::date
+                AND listeners IS NOT NULL;
+            """
+            q_window = f"""
+              SELECT COALESCE(MAX(listeners), 0)::int AS peak_window
+              FROM snapshots
+              WHERE ts_utc >= NOW() - INTERVAL '{days or 7} days'
+                AND listeners IS NOT NULL;
+            """
+            peak_today = await conn.fetchval(q_today)
+            peak_window = await conn.fetchval(q_window)
+            return {"peak_today": int(peak_today or 0), "peak_window": int(peak_window or 0)}

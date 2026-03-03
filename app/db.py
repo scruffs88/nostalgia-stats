@@ -95,6 +95,34 @@ async def get_hourly_stats(days: int, tz: str) -> List[Dict[str, Any]]:
     return [dict(r) for r in records]
 
 
+async def get_hourly_stats_range(start_utc, end_utc, tz: str) -> List[Dict[str, Any]]:
+    async with pool.acquire() as conn:  # type: ignore
+        records = await conn.fetch(
+            """
+            SELECT
+              hour,
+              ROUND(AVG(listeners)) AS avg_listeners,
+              MAX(listeners) AS max_listeners,
+              COUNT(*) AS samples
+            FROM (
+              SELECT
+                EXTRACT(HOUR FROM (ts_utc AT TIME ZONE 'UTC' AT TIME ZONE $1))::int AS hour,
+                listeners
+              FROM snapshots
+              WHERE ts_utc >= $2
+                AND ts_utc < $3
+                AND listeners IS NOT NULL
+            ) sub
+            GROUP BY hour
+            ORDER BY hour
+            """,
+            tz,
+            start_utc,
+            end_utc,
+        )
+    return [dict(r) for r in records]
+
+
 async def get_today_stats(tz: str) -> Dict[str, Optional[float]]:
     async with pool.acquire() as conn:  # type: ignore
         record = await conn.fetchrow(
