@@ -189,8 +189,14 @@ function makeHourlyChart(labels, values, annotations){
       datasets: [{
         label: "Avg listeners",
         data: values,
-        borderWidth: 0,
-        borderRadius: 8
+        backgroundColor: "rgba(56,189,248,0.55)",
+        borderColor: "rgba(56,189,248,0.95)",
+        borderWidth: 1,
+        borderRadius: 8,
+        hoverBackgroundColor: "rgba(56,189,248,0.85)",
+        hoverBorderColor: "rgba(56,189,248,1)",
+        barPercentage: 0.9,
+        categoryPercentage: 0.8
       }]
     },
     options: {
@@ -198,14 +204,26 @@ function makeHourlyChart(labels, values, annotations){
       animation: false,
       plugins: {
         legend: { display: true, labels: { boxWidth: 18 } },
-        tooltip: { intersect: false, mode: "index" },
+        tooltip: {
+          intersect: false,
+          mode: "index",
+          backgroundColor: "rgba(10,16,28,0.95)",
+          titleColor: "#e6edf6",
+          bodyColor: "#e6edf6",
+          callbacks: {
+            label: ctx => {
+              const v = ctx.parsed.y;
+              return `Avg: ${Number(v).toFixed(0)}`;
+            }
+          }
+        },
         annotation: {
           annotations: annotations || {}
         }
       },
       scales: {
-        x: { grid: { display: false }, ticks: { maxRotation: 0 } },
-        y: { beginAtZero: true, grid: { color: "rgba(255,255,255,.08)" } }
+        x: { grid: { display: false }, ticks: { color: "#9fb0c3", maxRotation: 0 } },
+        y: { beginAtZero: true, grid: { color: "rgba(255,255,255,0.08)" }, ticks: { color: "#9fb0c3" } }
       }
     }
   });
@@ -244,7 +262,7 @@ async function load(){
         type: "line",
         xMin: String(ev.hour).padStart(2,"0"),
         xMax: String(ev.hour).padStart(2,"0"),
-        borderColor: "rgba(255,255,255,.18)",
+        borderColor: "rgba(255,255,255,0.10)",
         borderWidth: 1,
         label: { display: false }
       };
